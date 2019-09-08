@@ -36,6 +36,11 @@ class SelectPhrase:
 
         return query
 
+class InsertPhrase:
+    @classmethod
+    def generate(self, id, kettonum, rating):
+        return "INSERT INTO uma_rating_01 VALUES('%s', '%s', '%s', '%s', '%s', '%s', '%s', %.1f);" % (id + (kettonum,) + (rating,))
+
 class IDListReference:
     def __init__(self, fromyear, toyear):
         self.table      = 'n_race'
@@ -59,221 +64,166 @@ class HorseInfoReference:
     def index(self, colname):
         return self.__cols.strip().split(', ').index(colname)
 
-class StaticalHorseInfoReference:
-    def __init__(self, kettonum):
-        self.table      = 'n_uma'
-        self.cols       = 'birthdate, hinsyucd'
-        self.conditions = 'kettonum=' + "'" + kettonum + "'"
-        self.order      = ''
-        self.limit      = ''
+class RatingReference:
+    __cols = 'year, monthday, jyocd, kaiji, nichiji, racenum, rating'
 
-class RaceInfoReference:
-    __cols = 'kyori, trackcd, tenkocd, sibababacd, dirtbabacd, syussotosu'
-    def __init__(self, id):
-        self.table      = 'n_race'
-        self.cols       = RaceInfoReference.__cols
-        self.conditions = IDFilter.generate_phrase(id) + " AND datakubun='7'"
-        self.order      = ''
+    def __init__(self, kettonum):
+        self.table      = 'uma_rating_01'
+        self.cols       = RatingReference.__cols
+        self.conditions = "kettonum='%s'" % kettonum
+        self.order      = 'year ASC, monthday ASC, jyocd ASC, nichiji ASC, racenum ASC'
         self.limit      = ''
 
     @classmethod
     def index(self, colname):
         return self.__cols.strip().split(', ').index(colname)
 
-class Converter:
+class IDReader:
     @classmethod
-    def raceid_to_datetime(cls, raceid):
-        return datetime.date(int(raceid[0]), int(raceid[1][:2]), int(raceid[1][2:4]))
-
-    @classmethod
-    def birthdate_to_datetime(cls, birthdate):
-        return datetime.date(int(birthdate[:4]), int(birthdate[4:6]), int(birthdate[6:8]))
-
-class RaceInfoLoader:
-    @classmethod
-    def load_data(self, id, connection):
+    def load_data(self, fromyear, toyear, connection):
         with connection.cursor() as cur:
-            query = SelectPhrase.generate(RaceInfoReference(id))
+            query = SelectPhrase.generate(IDListReference(fromyear, toyear))
             cur.execute(query)
-            rows = cur.fetchall()
+            id_list  = cur.fetchall()
 
-        if rows == None:
-            raise RuntimeError("Unexpected data shortage of raceinfo")
+        return id_list
 
-        elif len(rows) > 1:
-            print(query, rows)
-            raise RuntimeError("Unexpected data duplication in database")
+class UmaReader:
+    @classmethod
+    def __get_kettonum_list(self, rows):
+        kettonum_list = list()
 
-        row = rows[0]
+        for row in rows:
+            if row[HorseInfoReference.index('ijyocd')] != '0':
+                continue
+            kettonum_list.append( row[HorseInfoReference.index('kettonum')] )
 
-        kyori       = int(row[RaceInfoReference.index('kyori')])
+        return kettonum_list
 
-        # 00: Nodata, 10~22: turf, 23~29 dirt, 51~59 Steeple
-        trackcd     = int(row[RaceInfoReference.index('trackcd')])
-        if trackcd == 0:
-            raise RuntimeError("Unexpected data shortage of trackcd")
-        elif trackcd >= 10 and trackcd <= 22:
-            turf = 1
-            dirt = 0
-            steeple = 0
-        elif trackcd >= 23 and trackcd <= 29:
-            turf = 0
-            dirt = 1
-            steeple = 0
-        elif trackcd >= 51 and trackcd <= 59:
-            turf = 0
-            dirt = 0
-            steeple = 1
-        else:
-            raise NotImplementedError("trackcd: " + tenkocd + " is not implemented")
+    @classmethod
+    def __get_kakuteijyuni_list(self, rows):
+        kakuteijyuni_list = list()
 
-        # 0: No data, 1: Sunny, 2: Cloudy, 3: Rain, 4: Light rain, 5: Snow, 6: Light Snow
-        tenkocd     = int(row[RaceInfoReference.index('tenkocd')])
-        # no data or snow is out of scope
-        tenko = 0
-        if tenkocd == 0:
-            raise RuntimeError("Unexpected data shortage of tenkocd")
-        if tenkocd >= 5:
-            raise RuntimeError("Snow race is not supported")
-        elif tenkocd == 1 or tenkocd ==2:
-            tenko = 0
-        elif tenkocd == 4:
-            tenko = 0.5
-        elif tenkocd == 3:
-            tenko = 1.0
+        for row in rows:
+            kakuteijyuni_list.append( row[HorseInfoReference.index('kakuteijyuni')] )
 
-        # 0: No data, 1: Firm, 2: Good, 3: Yielding, 4: Soft
-        sibababacd  = int(row[RaceInfoReference.index('sibababacd')])
-        dirtbabacd  = int(row[RaceInfoReference.index('dirtbabacd')])
+        return kakuteijyuni_list
 
-        if sibababacd != 0:
-            baba = (sibababacd - 1) / 3.0
-        elif dirtbabacd != 0:
-            baba = (dirtbabacd - 1) / 3.0
-        else:
-            raise RuntimeError("Unexpected data shortage of baba")
-
-        syussotosu  = int(row[RaceInfoReference.index('syussotosu')])
-
-        return [kyori, turf, dirt, steeple, tenko, baba, syussotosu]
-
-class UmaInfoLoader:
     @classmethod
     def load_data(self, id, connection):
         with connection.cursor() as cur:
             # Get race specific uma info from n_race_uma
             query = SelectPhrase.generate(HorseInfoReference(id))
             cur.execute(query)
+            horse_info_list = cur.fetchall()
 
-            uma_list = []
-            kettonum_list = []
-            datapack = []
-            first_place = []
+            kettonum_list = UmaReader.__get_kettonum_list(horse_info_list)
+            kakuteijyuni_list = UmaReader.__get_kakuteijyuni_list(horse_info_list)
 
-            while True:
-                row = cur.fetchone()
-                if row == None:
-                    break
-                if row[HorseInfoReference.index('ijyocd')] != '0':
+        return kettonum_list, kakuteijyuni_list
+
+class RatingReader:
+    @classmethod
+    def __estimate_current_rating(self, rating_history):
+        if not rating_history:
+            return 1500
+        return rating_history[0][RatingReference.index('rating')]
+
+    @classmethod
+    def load_data(self, kettonum_list, connection):
+        rating_list = list()
+
+        with connection.cursor() as cur:
+            for kettonum in kettonum_list:
+                query = SelectPhrase.generate(RatingReference(kettonum))
+                cur.execute(query)
+                rating_history = cur.fetchall()
+
+                rating = RatingReader.__estimate_current_rating(rating_history)
+                rating_list.append(rating)
+
+        return rating_list
+
+class RatingWriter:
+    @classmethod
+    def write_data(self, id, kettonum_list, rating_list, connection):
+        with connection.cursor() as cur:
+            for kettonum, rating in zip(kettonum_list, rating_list):
+                query = InsertPhrase.generate(id, kettonum, rating)
+                cur.execute(query)
+
+class RatingCalculator:
+    k_factor = 32
+
+    @classmethod
+    def estimate(self, rating_list, kakuteijyuni_list):
+        new_rating_list = list()
+
+        for rating, jyuni in zip(rating_list, kakuteijyuni_list):
+            actual_sum = 0
+            expect_sum = 0
+            for rating_op, jyuni_op in zip(rating_list, kakuteijyuni_list):
+                if jyuni == jyuni_op:
                     continue
 
-                kettonum_list.append( row[HorseInfoReference.index('kettonum')] )
-                uma_list.append( row )
+                if jyuni > jyuni_op:
+                    actual_sum += 1.0
 
-            # Get constant uma info from n_uma
-            racedate = Converter.raceid_to_datetime(id)
+                expect_sum = 1.0 / (1 + pow(10, (rating_op - rating) / 400.0 ))
 
-            for (uma, kettonum) in zip(uma_list, kettonum_list):
-                query = SelectPhrase.generate(StaticalHorseInfoReference(kettonum))
-                cur.execute(query)
-                rows = cur.fetchall()
-                if rows == None:
-                    raise RuntimeError("Unexpected data shortage of statical horse info")
+            match_num = len(rating_list) - 1
+            new_rating_list.append(rating + self.k_factor * (actual_sum - expect_sum) / match_num)
 
-                elif len(rows) > 1:
-                    print(query)
-                    print(rows)
-                    raise RuntimeError("Unexpected data duplication in database")
+        return new_rating_list
 
-                row = rows[0]
-
-                birthdate = Converter.birthdate_to_datetime(row[0])
-
-                # Convert raw data for learning
-                umaban = int(uma[HorseInfoReference.index('umaban')] )
-                sexcd = int(uma[HorseInfoReference.index('sexcd')])
-                #kisyucode = int(uma[HorseInfoReference.index('kisyucode')])
-                futan = int(uma[HorseInfoReference.index('futan')])
-                bataijyu = int(uma[HorseInfoReference.index('bataijyu')])
-
-                kakuteijyuni = int(uma[HorseInfoReference.index('kakuteijyuni')])
-                if(kakuteijyuni == 1):
-                    first_place.append(1)
-                else:
-                    first_place.append(0)
-
-                # zogensa is zero when first race 
-                zogensa = 0
-                if (uma[HorseInfoReference.index('zogenfugo')] + uma[HorseInfoReference.index('zogensa')]):
-                    zogensa = int(uma[HorseInfoReference.index('zogenfugo')] + uma[HorseInfoReference.index('zogensa')])
-                # [year]
-                liveyear = (racedate - birthdate).days / 365
-
-                datapack.append([umaban, sexcd, futan, bataijyu, zogensa, liveyear, 1])
-
-            # padding data
-            if len(datapack) > 18:
-                raise RuntimeError("Syussotosu is too much")
-            for i in range(18 - len(datapack)):
-                datapack.append([     0,     0,     0,        0,       0,        0, 0])
-                first_place.append(0)
-
-        return datapack, first_place
-
-class psqlproxy:
+class RatingUpdator:
     def __init__(self):
         try:
-            self.connection = psycopg2.connect(os.environ.get('DATABASE_URL'))
+            self.connection_raw  = psycopg2.connect(os.environ.get('DATABASE_URL_SRC'))
         except:
-            print('psycopg2 connection faied')
+            print('psycopg2: opening connection 01 faied')
+            sys.exit(0)
+
+        try:
+            self.connection_processed = psycopg2.connect(os.environ.get('DATABASE_URL_DST'))
+        except:
+            print('psycopg2: opening connection 02 faied')
+            sys.exit(0)
 
     def __del__(self):
-        self.connection.close()
+        self.connection_raw .close()
+        self.connection_processed.close()
 
-    def __get_race_list_period(self, fromyear, toyear):
-        with self.connection.cursor() as cur:
-            query = SelectPhrase.generate(IDListReference(fromyear, toyear))
-            cur.execute(query)
-            rows = cur.fetchall()
+    def process(self, fromyear, toyear):
+        id_list = IDReader.load_data(fromyear, toyear, self.connection_raw)
 
-        return rows
+        kettonum_list = list()
+        estimate_current_rating = list()
 
-    def load_data(self, fromyear, toyear):
-        id_list = self.__get_race_list_period(fromyear, toyear)
-
-        race_info_list = list()
-        uma_info_list = [list() for i in range(18)]
-        first_place_list = list()
+        max_score=1500
+        min_score=1500
 
         for id in tqdm(id_list, desc='Gathering race data'):
             try:
-                uma_info, first_place= UmaInfoLoader.load_data(id, self.connection)
-                race_info = RaceInfoLoader.load_data(id, self.connection)
+                kettonum_list, kakuteijyuni_list= UmaReader.load_data(id, self.connection_raw )
+                rating_list = RatingReader.load_data(kettonum_list, self.connection_processed)
+
+                new_rating_list = RatingCalculator.estimate(rating_list, kakuteijyuni_list)
+                RatingWriter.write_data(id, kettonum_list, new_rating_list, self.connection_processed)
+
+                for rating in new_rating_list:
+                    if rating > max_score:
+                        max_score = rating
+                        print(max_score)
+                    if rating < min_score:
+                        min_score = rating
+                        print(min_score)
 
             except RuntimeError as e:
                 print(e)
                 continue
 
-            race_info_list.append(race_info)
-            for i in range(18):
-                uma_info_list[i].append(uma_info[i])
-            first_place_list.append(first_place)
-        return np.array([race_info_list,] + uma_info_list), np.array(first_place_list)
-
 if __name__ == "__main__":
-    pspr = psqlproxy()
-    race, uma, first_place = pspr.load_data('1992', '1993')
-    print(uma)
-    print(race)
-    print(first_place)
+    updator = RatingUpdator()
+    updator.process('1992', '1995')
 
