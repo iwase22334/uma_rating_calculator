@@ -48,7 +48,7 @@ class IDListReference:
         self.conditions = "datakubun='7'" + ' AND' + DateFilter.generate_condition_older(fromyear) + ' AND' + DateFilter.generate_condition_newer(toyear)
         self.order      = 'year ASC, monthday ASC, jyocd ASC, nichiji ASC, racenum ASC'
         self.limit      = ''
-        #self.limit      = '200'
+        self.limit      = '3'
 
 class HorseInfoReference:
     __cols = 'umaban, kettonum, sexcd, kisyucode, futan, bataijyu, zogenfugo, zogensa, ijyocd, kakuteijyuni'
@@ -150,7 +150,8 @@ class RatingWriter:
         with connection.cursor() as cur:
             for kettonum, rating in zip(kettonum_list, rating_list):
                 query = InsertPhrase.generate(id, kettonum, rating)
-                cur.execute(query)
+                print(query)
+                #cur.execute(query)
 
 class RatingCalculator:
     k_factor = 32
@@ -162,17 +163,18 @@ class RatingCalculator:
         for rating, jyuni in zip(rating_list, kakuteijyuni_list):
             actual_sum = 0
             expect_sum = 0
+
             for rating_op, jyuni_op in zip(rating_list, kakuteijyuni_list):
                 if jyuni == jyuni_op:
                     continue
 
-                if jyuni > jyuni_op:
-                    actual_sum += 1.0
-
-                expect_sum = 1.0 / (1 + pow(10, (rating_op - rating) / 400.0 ))
+                actual_sum += 0.0 if jyuni < jyuni_op else 1.0
+                expect_sum += 1.0 / (1 + pow(10, (rating_op - rating) / 400.0 ))
 
             match_num = len(rating_list) - 1
-            new_rating_list.append(rating + self.k_factor * (actual_sum - expect_sum) / match_num)
+            new_rating = rating + self.k_factor * (actual_sum - expect_sum) / match_num
+
+            new_rating_list.append(new_rating)
 
         return new_rating_list
 
@@ -201,7 +203,9 @@ class RatingUpdator:
         estimate_current_rating = list()
 
         max_score=1500
+        max_ketto=''
         min_score=1500
+        min_ketto=''
 
         for id in tqdm(id_list, desc='Gathering race data'):
             try:
@@ -211,13 +215,19 @@ class RatingUpdator:
                 new_rating_list = RatingCalculator.estimate(rating_list, kakuteijyuni_list)
                 RatingWriter.write_data(id, kettonum_list, new_rating_list, self.connection_processed)
 
-                for rating in new_rating_list:
+                updated=0
+                for rating, kettonum in zip(new_rating_list, kettonum_list):
                     if rating > max_score:
                         max_score = rating
-                        print(max_score)
+                        max_ketto = kettonum
+                        updated=1
                     if rating < min_score:
                         min_score = rating
-                        print(min_score)
+                        min_ketto = kettonum
+                        updated=1
+                if updated == 1:
+                    print(max_ketto, max_score)
+                    print(min_ketto, min_score)
 
             except RuntimeError as e:
                 print(e)
