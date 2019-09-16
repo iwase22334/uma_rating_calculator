@@ -11,6 +11,11 @@ class IDFilter:
     def generate_phrase(cls, id):
         return " year='%s' AND monthday='%s' AND jyocd='%s' AND kaiji='%s' AND nichiji='%s' AND racenum='%s'" % id
 
+class IDFilterUntilToday:
+    @classmethod
+    def generate_phrase(cls, id):
+        return " year<='%s' AND monthday<'%s'" % (id[0], id[1])
+
 class DateFilter:
     @classmethod
     def generate_condition_older(cls, year):
@@ -48,7 +53,7 @@ class IDListReference:
         self.conditions = "datakubun='7'" + ' AND' + DateFilter.generate_condition_older(fromyear) + ' AND' + DateFilter.generate_condition_newer(toyear)
         self.order      = 'year ASC, monthday ASC, jyocd ASC, nichiji ASC, racenum ASC'
         self.limit      = ''
-        self.limit      = '3'
+        #self.limit      = '3'
 
 class HorseInfoReference:
     __cols = 'umaban, kettonum, sexcd, kisyucode, futan, bataijyu, zogenfugo, zogensa, ijyocd, kakuteijyuni'
@@ -67,12 +72,12 @@ class HorseInfoReference:
 class RatingReference:
     __cols = 'year, monthday, jyocd, kaiji, nichiji, racenum, rating'
 
-    def __init__(self, kettonum):
+    def __init__(self, id, kettonum):
         self.table      = 'uma_rating_01'
         self.cols       = RatingReference.__cols
-        self.conditions = "kettonum='%s'" % kettonum
-        self.order      = 'year ASC, monthday ASC, jyocd ASC, nichiji ASC, racenum ASC'
-        self.limit      = ''
+        self.conditions = "kettonum='%s'" % kettonum + ' AND' + IDFilterUntilToday.generate_phrase(id)
+        self.order      = 'year DESC, monthday DESC'
+        self.limit      = '5'
 
     @classmethod
     def index(self, colname):
@@ -130,12 +135,12 @@ class RatingReader:
         return rating_history[0][RatingReference.index('rating')]
 
     @classmethod
-    def load_data(self, kettonum_list, connection):
+    def load_data(self, id, kettonum_list, connection):
         rating_list = list()
 
         with connection.cursor() as cur:
             for kettonum in kettonum_list:
-                query = SelectPhrase.generate(RatingReference(kettonum))
+                query = SelectPhrase.generate(RatingReference(id, kettonum))
                 cur.execute(query)
                 rating_history = cur.fetchall()
 
@@ -150,8 +155,7 @@ class RatingWriter:
         with connection.cursor() as cur:
             for kettonum, rating in zip(kettonum_list, rating_list):
                 query = InsertPhrase.generate(id, kettonum, rating)
-                print(query)
-                #cur.execute(query)
+                cur.execute(query)
 
 class RatingCalculator:
     k_factor = 32
@@ -178,6 +182,26 @@ class RatingCalculator:
 
         return new_rating_list
 
+class RecordKeeper:
+    def __init__(self, comp_func):
+        self.record = 1500
+        self.kettonum = ''
+        self.comp_func_ = comp_func
+        self.changed_ = False
+
+    def update(self, kettonum, score):
+        if self.comp_func_(score, self.record):
+            self.record = score
+            self.kettonum = kettonum
+            self.changed_ = True
+
+        return self.kettonum, self.record
+
+    def changed(self):
+        c = self.changed_
+        self.changed_ = False
+        return c
+
 class RatingUpdator:
     def __init__(self):
         try:
@@ -202,32 +226,28 @@ class RatingUpdator:
         kettonum_list = list()
         estimate_current_rating = list()
 
-        max_score=1500
-        max_ketto=''
-        min_score=1500
-        min_ketto=''
+        record_min = RecordKeeper( lambda x, record_value: x < record_value )
+        record_max = RecordKeeper( lambda x, record_value: x > record_value )
 
         for id in tqdm(id_list, desc='Gathering race data'):
             try:
                 kettonum_list, kakuteijyuni_list= UmaReader.load_data(id, self.connection_raw )
-                rating_list = RatingReader.load_data(kettonum_list, self.connection_processed)
+                rating_list = RatingReader.load_data(id, kettonum_list, self.connection_processed)
 
                 new_rating_list = RatingCalculator.estimate(rating_list, kakuteijyuni_list)
-                RatingWriter.write_data(id, kettonum_list, new_rating_list, self.connection_processed)
+                #RatingWriter.write_data(id, kettonum_list, new_rating_list, self.connection_processed)
+                self.connection_processed.commit()
 
-                updated=0
                 for rating, kettonum in zip(new_rating_list, kettonum_list):
-                    if rating > max_score:
-                        max_score = rating
-                        max_ketto = kettonum
-                        updated=1
-                    if rating < min_score:
-                        min_score = rating
-                        min_ketto = kettonum
-                        updated=1
-                if updated == 1:
-                    print(max_ketto, max_score)
-                    print(min_ketto, min_score)
+                    print(kettonum, rating)
+                    record_min.update(kettonum, rating)
+                    record_max.update(kettonum, rating)
+
+                if record_max.changed():
+                    print('max: ', record_max.kettonum, record_max.record)
+
+                if record_min.changed():
+                    print('min: ', record_min.kettonum, record_min.record)
 
             except RuntimeError as e:
                 print(e)
@@ -235,5 +255,5 @@ class RatingUpdator:
 
 if __name__ == "__main__":
     updator = RatingUpdator()
-    updator.process('1992', '1995')
+    updator.process('2000', '2010')
 
