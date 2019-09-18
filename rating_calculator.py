@@ -14,7 +14,7 @@ class IDFilter:
 class IDFilterUntilToday:
     @classmethod
     def generate_phrase(cls, id):
-        return " year<='%s' AND monthday<'%s'" % (id[0], id[1])
+        return " concat(year, monthday)<'%s'" % (id[0] + id[1],)
 
 class DateFilter:
     @classmethod
@@ -77,7 +77,7 @@ class RatingReference:
         self.cols       = RatingReference.__cols
         self.conditions = "kettonum='%s'" % kettonum + ' AND' + IDFilterUntilToday.generate_phrase(id)
         self.order      = 'year DESC, monthday DESC'
-        self.limit      = '5'
+        self.limit      = '3'
 
     @classmethod
     def index(self, colname):
@@ -172,11 +172,12 @@ class RatingCalculator:
                 if jyuni == jyuni_op:
                     continue
 
-                actual_sum += 0.0 if jyuni < jyuni_op else 1.0
+                actual_sum += 1.0 if jyuni < jyuni_op else 0.0
                 expect_sum += 1.0 / (1 + pow(10, (rating_op - rating) / 400.0 ))
 
             match_num = len(rating_list) - 1
             new_rating = rating + self.k_factor * (actual_sum - expect_sum) / match_num
+            #new_rating = rating + self.k_factor * (actual_sum - expect_sum)
 
             new_rating_list.append(new_rating)
 
@@ -235,11 +236,10 @@ class RatingUpdator:
                 rating_list = RatingReader.load_data(id, kettonum_list, self.connection_processed)
 
                 new_rating_list = RatingCalculator.estimate(rating_list, kakuteijyuni_list)
-                #RatingWriter.write_data(id, kettonum_list, new_rating_list, self.connection_processed)
+                RatingWriter.write_data(id, kettonum_list, new_rating_list, self.connection_processed)
                 self.connection_processed.commit()
 
                 for rating, kettonum in zip(new_rating_list, kettonum_list):
-                    print(kettonum, rating)
                     record_min.update(kettonum, rating)
                     record_max.update(kettonum, rating)
 
