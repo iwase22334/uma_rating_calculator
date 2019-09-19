@@ -18,12 +18,12 @@ class IDFilterUntilToday:
 
 class DateFilter:
     @classmethod
-    def generate_condition_older(cls, year):
-        return " year>='%s'" % year[0:4]
+    def generate_condition_older(cls, yearmonthday):
+        return " concat(year, monthday)>='%s'" % yearmonthday
 
     @classmethod
-    def generate_condition_newer(cls, year):
-        return " year<='%s'" % year[0:4]
+    def generate_condition_newer(cls, yearmonthday):
+        return " concat(year, monthday)<='%s'" % yearmonthday
 
 class SelectPhrase:
     @classmethod
@@ -47,10 +47,10 @@ class InsertPhrase:
         return "INSERT INTO uma_rating_01 VALUES('%s', '%s', '%s', '%s', '%s', '%s', '%s', %.1f);" % (id + (kettonum,) + (rating,))
 
 class IDListReference:
-    def __init__(self, fromyear, toyear):
+    def __init__(self, fromyearmonthday, toyearmonthday):
         self.table      = 'n_race'
         self.cols       = 'year, monthday, jyocd, kaiji, nichiji, racenum'
-        self.conditions = "datakubun='7'" + ' AND' + DateFilter.generate_condition_older(fromyear) + ' AND' + DateFilter.generate_condition_newer(toyear)
+        self.conditions = "datakubun='7'" + ' AND' + DateFilter.generate_condition_older(fromyearmonthday) + ' AND' + DateFilter.generate_condition_newer(toyearmonthday)
         self.order      = 'year ASC, monthday ASC, jyocd ASC, nichiji ASC, racenum ASC'
         self.limit      = ''
         #self.limit      = '3'
@@ -86,7 +86,7 @@ class RatingReference:
 class IDReader:
     @classmethod
     def load_data(self, fromyear, toyear, connection):
-        with connection.cursor() as cur:
+        with connection.cursor('id_cursor') as cur:
             query = SelectPhrase.generate(IDListReference(fromyear, toyear))
             cur.execute(query)
             id_list  = cur.fetchall()
@@ -116,7 +116,7 @@ class UmaReader:
 
     @classmethod
     def load_data(self, id, connection):
-        with connection.cursor() as cur:
+        with connection.cursor('uma_cursor') as cur:
             # Get race specific uma info from n_race_uma
             query = SelectPhrase.generate(HorseInfoReference(id))
             cur.execute(query)
@@ -138,24 +138,25 @@ class RatingReader:
     def load_data(self, id, kettonum_list, connection):
         rating_list = list()
 
-        with connection.cursor() as cur:
-            for kettonum in kettonum_list:
+        for kettonum in kettonum_list:
+            with connection.cursor('rating_cursor') as cur:
                 query = SelectPhrase.generate(RatingReference(id, kettonum))
                 cur.execute(query)
                 rating_history = cur.fetchall()
 
-                rating = RatingReader.__estimate_current_rating(rating_history)
-                rating_list.append(rating)
+            rating = RatingReader.__estimate_current_rating(rating_history)
+            rating_list.append(rating)
 
         return rating_list
 
 class RatingWriter:
     @classmethod
     def write_data(self, id, kettonum_list, rating_list, connection):
-        with connection.cursor() as cur:
-            for kettonum, rating in zip(kettonum_list, rating_list):
+        for kettonum, rating in zip(kettonum_list, rating_list):
+            with connection.cursor() as cur:
                 query = InsertPhrase.generate(id, kettonum, rating)
                 cur.execute(query)
+        connection.commit()
 
 class RatingCalculator:
     k_factor = 32
@@ -177,7 +178,6 @@ class RatingCalculator:
 
             match_num = len(rating_list) - 1
             new_rating = rating + self.k_factor * (actual_sum - expect_sum) / match_num
-            #new_rating = rating + self.k_factor * (actual_sum - expect_sum)
 
             new_rating_list.append(new_rating)
 
@@ -221,8 +221,8 @@ class RatingUpdator:
         self.connection_raw .close()
         self.connection_processed.close()
 
-    def process(self, fromyear, toyear):
-        id_list = IDReader.load_data(fromyear, toyear, self.connection_raw)
+    def process(self, fromyearmonthday, toyearmonthday):
+        id_list = IDReader.load_data(fromyearmonthday, toyearmonthday, self.connection_raw)
 
         kettonum_list = list()
         estimate_current_rating = list()
@@ -231,23 +231,22 @@ class RatingUpdator:
         record_max = RecordKeeper( lambda x, record_value: x > record_value )
 
         for id in tqdm(id_list, desc='Gathering race data'):
+
+            #print('\n%s%s%s%s%s%s' % id, end='\033[1A\r', flush=True) 
+            print('\n%s%s%s%s%s%s' % id) 
+            print('max: [%s, %.1lf]' % (record_max.kettonum, record_max.record))
+            print('min: [%s, %.1lf]' % (record_min.kettonum, record_min.record), end='\033[3A\r', flush=True)
+
             try:
                 kettonum_list, kakuteijyuni_list= UmaReader.load_data(id, self.connection_raw )
                 rating_list = RatingReader.load_data(id, kettonum_list, self.connection_processed)
 
                 new_rating_list = RatingCalculator.estimate(rating_list, kakuteijyuni_list)
                 RatingWriter.write_data(id, kettonum_list, new_rating_list, self.connection_processed)
-                self.connection_processed.commit()
 
                 for rating, kettonum in zip(new_rating_list, kettonum_list):
                     record_min.update(kettonum, rating)
                     record_max.update(kettonum, rating)
-
-                if record_max.changed():
-                    print('max: ', record_max.kettonum, record_max.record)
-
-                if record_min.changed():
-                    print('min: ', record_min.kettonum, record_min.record)
 
             except RuntimeError as e:
                 print(e)
@@ -255,5 +254,6 @@ class RatingUpdator:
 
 if __name__ == "__main__":
     updator = RatingUpdator()
-    updator.process('2000', '2010')
+    #updator.process('1900', '2020')
+    updator.process('19990000', '20100000')
 
