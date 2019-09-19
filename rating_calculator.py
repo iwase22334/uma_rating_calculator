@@ -232,8 +232,7 @@ class RatingUpdator:
 
         for id in tqdm(id_list, desc='Gathering race data'):
 
-            #print('\n%s%s%s%s%s%s' % id, end='\033[1A\r', flush=True) 
-            print('\n%s%s%s%s%s%s' % id) 
+            print('\nprocessing id: %s%s%s%s%s%s' % id)
             print('max: [%s, %.1lf]' % (record_max.kettonum, record_max.record))
             print('min: [%s, %.1lf]' % (record_min.kettonum, record_min.record), end='\033[3A\r', flush=True)
 
@@ -251,6 +250,8 @@ class RatingUpdator:
             except RuntimeError as e:
                 print(e)
                 continue
+
+        print('\n\n\n\n')
 
 if __name__ == "__main__":
     updator = RatingUpdator()
