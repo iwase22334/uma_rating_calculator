@@ -6,3 +6,6 @@ export PGDATABASE_DST="uma_processed"
 export PGDATABASE_SRC="everydb2"
 export DATABASE_URL_DST="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE_DST}"
 export DATABASE_URL_SRC="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE_SRC}"
+
+export DB_EVERYDB2="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/${PGDATABASE}"
+export DB_UMA_PROCESSED="postgresql://${PGUSER}:${PGPASSWORD}@${PGHOST}:${PGPORT}/uma_processed"
