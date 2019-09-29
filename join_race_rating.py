@@ -125,7 +125,7 @@ class RatingReader:
                 rating_list.append(('0000', '0000', '00', '00', '00', '00', '1400'))
                 continue
 
-            rating_list.append(rating)
+            rating_list.append(rows[0])
 
         return rating_list
 
