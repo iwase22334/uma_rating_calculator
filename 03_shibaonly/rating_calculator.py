@@ -6,7 +6,7 @@ import psycopg2
 import datetime
 from tqdm import tqdm
 
-target_table='uma_rating_02'
+target_table='uma_rating_03'
 
 class IDFilter:
     @classmethod
@@ -57,6 +57,15 @@ class IDListReference:
         self.limit      = ''
         #self.limit      = '3'
 
+class RaceInfoReference:
+    def __init__(self, id):
+        self.table      = 'n_race'
+        self.cols       = 'trackcd'
+        self.conditions = IDFilter.generate_phrase(id) + " AND datakubun='7'"
+        self.order      = 'year ASC, monthday ASC, jyocd ASC, nichiji ASC, racenum ASC'
+        self.limit      = ''
+        #self.limit      = '3'
+
 class HorseInfoReference:
     __cols = 'umaban, kettonum, sexcd, kisyucode, futan, bataijyu, zogenfugo, zogensa, ijyocd, kakuteijyuni'
 
@@ -95,26 +104,30 @@ class IDReader:
 
         return id_list
 
-class UmaReader:
+class TrackcdReader:
     @classmethod
-    def __get_kettonum_list(self, rows):
+    def load_data(self, id, connection):
+        with connection.cursor('uma_cursor') as cur:
+            query = "select trackcd from n_race where %s AND datakubun='7'" % (IDFilter.generate_phrase(id),)
+            cur.execute(query)
+            row = cur.fetchone()
+
+        return row[0]
+
+class UmaReader:
+
+    @classmethod
+    def __analyze(self, rows):
+        kakuteijyuni_list = list()
         kettonum_list = list()
 
         for row in rows:
             if row[HorseInfoReference.index('ijyocd')] != '0':
                 continue
             kettonum_list.append( row[HorseInfoReference.index('kettonum')] )
-
-        return kettonum_list
-
-    @classmethod
-    def __get_kakuteijyuni_list(self, rows):
-        kakuteijyuni_list = list()
-
-        for row in rows:
             kakuteijyuni_list.append( row[HorseInfoReference.index('kakuteijyuni')] )
 
-        return kakuteijyuni_list
+        return kettonum_list, kakuteijyuni_list
 
     @classmethod
     def load_data(self, id, connection):
@@ -124,8 +137,7 @@ class UmaReader:
             cur.execute(query)
             horse_info_list = cur.fetchall()
 
-            kettonum_list = UmaReader.__get_kettonum_list(horse_info_list)
-            kakuteijyuni_list = UmaReader.__get_kakuteijyuni_list(horse_info_list)
+            kettonum_list, kakuteijyuni_list = UmaReader.__analyze(horse_info_list)
 
         return kettonum_list, kakuteijyuni_list
 
@@ -214,7 +226,7 @@ class RatingUpdator:
             sys.exit(0)
 
         try:
-            self.connection_processed = psycopg2.connect(os.environ.get('DATABASE_URL_DST'))
+            self.connection_processed = psycopg2.connect(os.environ.get('DB_UMA_PROCESSED'))
         except:
             print('psycopg2: opening connection 02 faied')
             sys.exit(0)
@@ -232,26 +244,37 @@ class RatingUpdator:
         record_min = RecordKeeper( lambda x, record_value: x < record_value )
         record_max = RecordKeeper( lambda x, record_value: x > record_value )
 
+        count = 0
         for id in tqdm(id_list, desc='Gathering race data'):
 
-            print('\nprocessing id: %s%s%s%s%s%s' % id)
+            print('\nprocessing id: %s%s%s%s%s%s' % id, ' [%s]' % (count, ))
             print('max: [%s, %.1lf]' % (record_max.kettonum, record_max.record))
             print('min: [%s, %.1lf]' % (record_min.kettonum, record_min.record), end='\033[3A\r', flush=True)
 
-            try:
-                kettonum_list, kakuteijyuni_list= UmaReader.load_data(id, self.connection_raw )
-                rating_list = RatingReader.load_data(id, kettonum_list, self.connection_processed)
+            trackcd = TrackcdReader.load_data(id, self.connection_raw)
+            if not trackcd.isdigit():
+                print("invalid trackcd:", id, trackcd)
 
-                new_rating_list = RatingCalculator.estimate(rating_list, kakuteijyuni_list)
-                RatingWriter.write_data(id, kettonum_list, new_rating_list, self.connection_processed)
+            elif trackcd == "00":
+                print("notset:", id,  trackcd)
 
-                for rating, kettonum in zip(new_rating_list, kettonum_list):
-                    record_min.update(kettonum, rating)
-                    record_max.update(kettonum, rating)
+            elif int(trackcd) <= 22:
+                try:
+                    kettonum_list, kakuteijyuni_list= UmaReader.load_data(id, self.connection_raw )
+                    rating_list = RatingReader.load_data(id, kettonum_list, self.connection_processed)
 
-            except RuntimeError as e:
-                print(e)
-                continue
+                    new_rating_list = RatingCalculator.estimate(rating_list, kakuteijyuni_list)
+                    RatingWriter.write_data(id, kettonum_list, new_rating_list, self.connection_processed)
+
+                    for rating, kettonum in zip(new_rating_list, kettonum_list):
+                        record_min.update(kettonum, rating)
+                        record_max.update(kettonum, rating)
+
+                    count = count + 1
+
+                except RuntimeError as e:
+                    print(e)
+                    continue
 
         print('\n\n\n\n')
 
