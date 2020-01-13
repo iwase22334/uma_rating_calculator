@@ -6,7 +6,7 @@ import psycopg2
 import datetime
 from tqdm import tqdm
 
-target_table='uma_rating_05'
+target_table='uma_rating_10'
 
 class IDFilter:
     @classmethod
@@ -196,43 +196,92 @@ class RatingWriter:
         connection.commit()
 
 class RatingCalculator:
-    k_factor = 32
-
     @classmethod
     def estimate(self, rating_list, kakuteijyuni_list):
         assert(len(rating_list) == len(kakuteijyuni_list))
-        new_rating_list = list()
 
-        rating_top = 0
+        new_rating_list = list(rating_list)
+
+        k_factor_first = 16
+        k_factor_second = 8
+        k_factor_third = 4
+
+        rating_first = 0
+        rating_second = 0
+        rating_third = 0
+
         for rating, jyuni in zip(rating_list, kakuteijyuni_list):
             if jyuni == '01':
-                rating_top = rating
-                break
+                rating_first = rating
 
-        if rating_top == 0:
+            elif jyuni == '02':
+                rating_second = rating
+
+            elif jyuni == '03':
+                rating_third = rating
+
+        if rating_first == 0:
             print('invalid data')
             print(rating_list)
             print(kakuteijyuni_list)
-            exit()
+            raise RuntimeError('invalid data')
 
-        for rating, jyuni in zip(rating_list, kakuteijyuni_list):
+        expect = lambda rating_op, rating: 1.0 / (1 + pow(10, (rating_op - rating) / 400.0 ))
+        reword = lambda k_factor, actual, expect: k_factor * (actual - expect)
+
+        for index, rating, jyuni in zip(range(len(rating_list)), rating_list, kakuteijyuni_list):
             actual_sum = 0
             expect_sum = 0
+            new_rating = 0
 
             if jyuni == '01':
                 for rating_op, jyuni_op in zip(rating_list, kakuteijyuni_list):
                     if jyuni == jyuni_op:
                         continue
-                    expect_sum += 1.0 / (1 + pow(10, (rating_op - rating) / 400.0 ))
+                    expect_sum += expect(rating_op, rating)
 
                 actual_sum = len(rating_list) - 1
-                new_rating = rating + self.k_factor * (actual_sum - expect_sum) 
+
+                new_rating = rating + reword(k_factor_first, actual_sum, expect_sum) 
+
+            elif jyuni == '02':
+                for rating_op, jyuni_op in zip(rating_list, kakuteijyuni_list):
+                    if jyuni == '01':
+                        continue
+                    if jyuni == jyuni_op:
+                        continue
+                    expect_sum += expect(rating_op, rating)
+
+                actual_sum = len(rating_list) - 2
+
+                new_rating = rating\
+                            + reword(k_factor_first, 0, expect(rating_first, rating))\
+                            + reword(k_factor_second, actual_sum, expect_sum) 
+
+            elif jyuni == '03':
+                for rating_op, jyuni_op in zip(rating_list, kakuteijyuni_list):
+                    if jyuni == '01':
+                        continue
+                    if jyuni == '02':
+                        continue
+                    if jyuni == jyuni_op:
+                        continue
+                    expect_sum += expect(rating_op, rating)
+
+                actual_sum = len(rating_list) - 3
+
+                new_rating = rating\
+                            + reword(k_factor_first, 0, expect(rating_first, rating))\
+                            + reword(k_factor_second, 0, expect(rating_second, rating))\
+                            + reword(k_factor_third, actual_sum, expect_sum) 
 
             else:
-                expect = 1.0 / (1 + pow(10, (rating_top - rating) / 400.0 ))
-                new_rating = rating + self.k_factor * (0 - expect)
+                new_rating = rating\
+                            + reword(k_factor_first, 0, expect(rating_first, rating))\
+                            + reword(k_factor_second, 0, expect(rating_second, rating))\
+                            + reword(k_factor_third, 0, expect(rating_third, rating))
 
-            new_rating_list.append(new_rating)
+            new_rating_list[index] = new_rating
 
         return new_rating_list
 
@@ -277,6 +326,7 @@ class RatingUpdator:
     def process(self, fromyearmonthday, toyearmonthday):
         id_list = IDReader.load_data(fromyearmonthday, toyearmonthday, self.connection_raw)
 
+        new_rating_list = list()
         kettonum_list = list()
         estimate_current_rating = list()
 

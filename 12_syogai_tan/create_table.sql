@@ -1,4 +1,4 @@
-CREATE TABLE uma_rating_06 
+CREATE TABLE uma_rating_12 
 (
     Year char(4),
     MonthDay char(4),
